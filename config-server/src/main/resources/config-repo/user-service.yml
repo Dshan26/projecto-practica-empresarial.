@@ -1,0 +1,28 @@
+server:
+  port: 8081
+
+spring:
+  application:
+    name: user-service
+  r2dbc:
+    url: ${SPRING_R2DBC_URL:r2dbc:postgresql://localhost:5432/users_db}
+    username: ${SPRING_R2DBC_USERNAME:recruitment}
+    password: ${SPRING_R2DBC_PASSWORD:recruitment123}
+  flyway:
+    url: ${SPRING_FLYWAY_URL:jdbc:postgresql://localhost:5432/users_db}
+    user: ${SPRING_FLYWAY_USER:recruitment}
+    password: ${SPRING_FLYWAY_PASSWORD:recruitment123}
+    enabled: true
+
+eureka:
+  client:
+    serviceUrl:
+      defaultZone: ${EUREKA_CLIENT_SERVICEURL_DEFAULTZONE:http://localhost:8761/eureka/}
+  instance:
+    preferIpAddress: true
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info

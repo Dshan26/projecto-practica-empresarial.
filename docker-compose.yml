@@ -1,0 +1,450 @@
+services:
+  # ========================
+  # Databases
+  # ========================
+  postgres:
+    image: postgres:16-alpine
+    container_name: recruitment-postgres
+    environment:
+      POSTGRES_USER: recruitment
+      POSTGRES_PASSWORD: recruitment123
+      POSTGRES_DB: recruitment
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./infrastructure/init-databases.sql:/docker-entrypoint-initdb.d/init-databases.sql
+    networks:
+      - recruitment-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U recruitment"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  mongodb:
+    image: mongo:7
+    container_name: recruitment-mongodb
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongo_data:/data/db
+    networks:
+      - recruitment-network
+    healthcheck:
+      test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ========================
+  # Messaging
+  # ========================
+  zookeeper:
+    image: confluentinc/cp-zookeeper:7.6.0
+    container_name: recruitment-zookeeper
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+    ports:
+      - "2181:2181"
+    networks:
+      - recruitment-network
+    healthcheck:
+      test: ["CMD-SHELL", "echo ruok | nc -w 2 localhost 2181 || exit 0"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+
+  kafka:
+    image: confluentinc/cp-kafka:7.6.0
+    container_name: recruitment-kafka
+    depends_on:
+      zookeeper:
+        condition: service_healthy
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092,PLAINTEXT_HOST://localhost:29092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+    ports:
+      - "9092:9092"
+      - "29092:29092"
+    networks:
+      - recruitment-network
+    healthcheck:
+      test: ["CMD-SHELL", "kafka-broker-api-versions --bootstrap-server localhost:9092"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+
+  # ========================
+  # Infrastructure Services
+  # ========================
+  eureka-server:
+    build:
+      context: ./eureka-server
+      dockerfile: Dockerfile
+    container_name: recruitment-eureka
+    ports:
+      - "8761:8761"
+    networks:
+      - recruitment-network
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8761/actuator/health || exit 1"]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+      start_period: 30s
+
+  config-server:
+    build:
+      context: ./config-server
+      dockerfile: Dockerfile
+    container_name: recruitment-config
+    depends_on:
+      eureka-server:
+        condition: service_healthy
+    environment:
+      EUREKA_CLIENT_SERVICEURL_DEFAULTZONE: http://eureka-server:8761/eureka/
+    ports:
+      - "8888:8888"
+    networks:
+      - recruitment-network
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8888/actuator/health || exit 1"]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+      start_period: 30s
+
+  # ========================
+  # Microservices
+  # ========================
+  user-service:
+    build:
+      context: ./user-service
+      dockerfile: Dockerfile
+    container_name: recruitment-user-service
+    depends_on:
+      postgres:
+        condition: service_healthy
+      config-server:
+        condition: service_healthy
+      eureka-server:
+        condition: service_healthy
+    environment:
+      SPRING_PROFILES_ACTIVE: docker
+      EUREKA_CLIENT_SERVICEURL_DEFAULTZONE: http://eureka-server:8761/eureka/
+      SPRING_CLOUD_CONFIG_URI: http://config-server:8888
+      SPRING_R2DBC_URL: r2dbc:postgresql://postgres:5432/users_db
+      SPRING_R2DBC_USERNAME: recruitment
+      SPRING_R2DBC_PASSWORD: recruitment123
+      SPRING_FLYWAY_URL: jdbc:postgresql://postgres:5432/users_db
+      SPRING_FLYWAY_USER: recruitment
+      SPRING_FLYWAY_PASSWORD: recruitment123
+    ports:
+      - "8081:8081"
+    networks:
+      - recruitment-network
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8081/actuator/health || exit 1"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+
+  job-offer-service:
+    build:
+      context: ./job-offer-service
+      dockerfile: Dockerfile
+    container_name: recruitment-job-offer-service
+    depends_on:
+      postgres:
+        condition: service_healthy
+      config-server:
+        condition: service_healthy
+      eureka-server:
+        condition: service_healthy
+    environment:
+      SPRING_PROFILES_ACTIVE: docker
+      EUREKA_CLIENT_SERVICEURL_DEFAULTZONE: http://eureka-server:8761/eureka/
+      SPRING_CLOUD_CONFIG_URI: http://config-server:8888
+      SPRING_R2DBC_URL: r2dbc:postgresql://postgres:5432/job_offers_db
+      SPRING_R2DBC_USERNAME: recruitment
+      SPRING_R2DBC_PASSWORD: recruitment123
+      SPRING_FLYWAY_URL: jdbc:postgresql://postgres:5432/job_offers_db
+      SPRING_FLYWAY_USER: recruitment
+      SPRING_FLYWAY_PASSWORD: recruitment123
+    ports:
+      - "8082:8082"
+    networks:
+      - recruitment-network
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8082/actuator/health || exit 1"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+
+  cv-processing-service:
+    build:
+      context: ./cv-processing-service
+      dockerfile: Dockerfile
+    container_name: recruitment-cv-processing-service
+    depends_on:
+      postgres:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+      config-server:
+        condition: service_healthy
+      eureka-server:
+        condition: service_healthy
+    environment:
+      SPRING_PROFILES_ACTIVE: docker
+      EUREKA_CLIENT_SERVICEURL_DEFAULTZONE: http://eureka-server:8761/eureka/
+      SPRING_CLOUD_CONFIG_URI: http://config-server:8888
+      SPRING_R2DBC_URL: r2dbc:postgresql://postgres:5432/cv_processing_db
+      SPRING_R2DBC_USERNAME: recruitment
+      SPRING_R2DBC_PASSWORD: recruitment123
+      SPRING_FLYWAY_URL: jdbc:postgresql://postgres:5432/cv_processing_db
+      SPRING_FLYWAY_USER: recruitment
+      SPRING_FLYWAY_PASSWORD: recruitment123
+      SPRING_KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+    ports:
+      - "8083:8083"
+    networks:
+      - recruitment-network
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8083/actuator/health || exit 1"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+
+  ai-analysis-service:
+    build:
+      context: ./ai-analysis-service
+      dockerfile: Dockerfile
+    container_name: recruitment-ai-analysis-service
+    depends_on:
+      mongodb:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+      config-server:
+        condition: service_healthy
+      eureka-server:
+        condition: service_healthy
+    environment:
+      SPRING_PROFILES_ACTIVE: docker
+      EUREKA_CLIENT_SERVICEURL_DEFAULTZONE: http://eureka-server:8761/eureka/
+      SPRING_CLOUD_CONFIG_URI: http://config-server:8888
+      SPRING_DATA_MONGODB_URI: mongodb://mongodb:27017/ai_analysis_db
+      SPRING_KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      OPENAI_API_KEY: ${OPENAI_API_KEY}
+    ports:
+      - "8084:8084"
+    networks:
+      - recruitment-network
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8084/actuator/health || exit 1"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+
+  scoring-service:
+    build:
+      context: ./scoring-service
+      dockerfile: Dockerfile
+    container_name: recruitment-scoring-service
+    depends_on:
+      postgres:
+        condition: service_healthy
+      config-server:
+        condition: service_healthy
+      eureka-server:
+        condition: service_healthy
+    environment:
+      SPRING_PROFILES_ACTIVE: docker
+      EUREKA_CLIENT_SERVICEURL_DEFAULTZONE: http://eureka-server:8761/eureka/
+      SPRING_CLOUD_CONFIG_URI: http://config-server:8888
+      SPRING_R2DBC_URL: r2dbc:postgresql://postgres:5432/scores_db
+      SPRING_R2DBC_USERNAME: recruitment
+      SPRING_R2DBC_PASSWORD: recruitment123
+      SPRING_FLYWAY_URL: jdbc:postgresql://postgres:5432/scores_db
+      SPRING_FLYWAY_USER: recruitment
+      SPRING_FLYWAY_PASSWORD: recruitment123
+    ports:
+      - "8085:8085"
+    networks:
+      - recruitment-network
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8085/actuator/health || exit 1"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+
+  technical-test-service:
+    build:
+      context: ./technical-test-service
+      dockerfile: Dockerfile
+    container_name: recruitment-technical-test-service
+    depends_on:
+      postgres:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+      config-server:
+        condition: service_healthy
+      eureka-server:
+        condition: service_healthy
+    environment:
+      SPRING_PROFILES_ACTIVE: docker
+      EUREKA_CLIENT_SERVICEURL_DEFAULTZONE: http://eureka-server:8761/eureka/
+      SPRING_CLOUD_CONFIG_URI: http://config-server:8888
+      SPRING_R2DBC_URL: r2dbc:postgresql://postgres:5432/technical_tests_db
+      SPRING_R2DBC_USERNAME: recruitment
+      SPRING_R2DBC_PASSWORD: recruitment123
+      SPRING_FLYWAY_URL: jdbc:postgresql://postgres:5432/technical_tests_db
+      SPRING_FLYWAY_USER: recruitment
+      SPRING_FLYWAY_PASSWORD: recruitment123
+      SPRING_KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      OPENAI_API_KEY: ${OPENAI_API_KEY}
+    ports:
+      - "8086:8086"
+    networks:
+      - recruitment-network
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8086/actuator/health || exit 1"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+
+  evaluation-service:
+    build:
+      context: ./evaluation-service
+      dockerfile: Dockerfile
+    container_name: recruitment-evaluation-service
+    depends_on:
+      postgres:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+      config-server:
+        condition: service_healthy
+      eureka-server:
+        condition: service_healthy
+    environment:
+      SPRING_PROFILES_ACTIVE: docker
+      EUREKA_CLIENT_SERVICEURL_DEFAULTZONE: http://eureka-server:8761/eureka/
+      SPRING_CLOUD_CONFIG_URI: http://config-server:8888
+      SPRING_R2DBC_URL: r2dbc:postgresql://postgres:5432/evaluations_db
+      SPRING_R2DBC_USERNAME: recruitment
+      SPRING_R2DBC_PASSWORD: recruitment123
+      SPRING_FLYWAY_URL: jdbc:postgresql://postgres:5432/evaluations_db
+      SPRING_FLYWAY_USER: recruitment
+      SPRING_FLYWAY_PASSWORD: recruitment123
+      SPRING_KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+    ports:
+      - "8087:8087"
+    networks:
+      - recruitment-network
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8087/actuator/health || exit 1"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+
+  ranking-service:
+    build:
+      context: ./ranking-service
+      dockerfile: Dockerfile
+    container_name: recruitment-ranking-service
+    depends_on:
+      postgres:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+      config-server:
+        condition: service_healthy
+      eureka-server:
+        condition: service_healthy
+    environment:
+      SPRING_PROFILES_ACTIVE: docker
+      EUREKA_CLIENT_SERVICEURL_DEFAULTZONE: http://eureka-server:8761/eureka/
+      SPRING_CLOUD_CONFIG_URI: http://config-server:8888
+      SPRING_R2DBC_URL: r2dbc:postgresql://postgres:5432/rankings_db
+      SPRING_R2DBC_USERNAME: recruitment
+      SPRING_R2DBC_PASSWORD: recruitment123
+      SPRING_FLYWAY_URL: jdbc:postgresql://postgres:5432/rankings_db
+      SPRING_FLYWAY_USER: recruitment
+      SPRING_FLYWAY_PASSWORD: recruitment123
+      SPRING_KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+    ports:
+      - "8088:8088"
+    networks:
+      - recruitment-network
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8088/actuator/health || exit 1"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+
+  # ========================
+  # API Gateway
+  # ========================
+  api-gateway:
+    build:
+      context: ./api-gateway
+      dockerfile: Dockerfile
+    container_name: recruitment-api-gateway
+    depends_on:
+      eureka-server:
+        condition: service_healthy
+      config-server:
+        condition: service_healthy
+    environment:
+      SPRING_PROFILES_ACTIVE: docker
+      EUREKA_CLIENT_SERVICEURL_DEFAULTZONE: http://eureka-server:8761/eureka/
+      SPRING_CLOUD_CONFIG_URI: http://config-server:8888
+    ports:
+      - "8090:8080"
+    networks:
+      - recruitment-network
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8080/actuator/health || exit 1"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+
+  # ========================
+  # Frontend
+  # ========================
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: recruitment-frontend
+    ports:
+      - "3001:80"
+    networks:
+      - recruitment-network
+
+# ========================
+# Volumes
+# ========================
+volumes:
+  postgres_data:
+    driver: local
+  mongo_data:
+    driver: local
+
+# ========================
+# Networks
+# ========================
+networks:
+  recruitment-network:
+    driver: bridge
