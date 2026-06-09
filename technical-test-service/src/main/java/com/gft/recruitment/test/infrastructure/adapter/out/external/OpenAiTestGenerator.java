@@ -80,7 +80,9 @@ public class OpenAiTestGenerator {
                 - Corrija bugs en fragmentos de código
                 - Diseñe clases o interfaces
                 
-                IMPORTANTE: Las preguntas de código deben ser lo suficientemente específicas para detectar si el candidato realmente sabe programar o si usó IA para generar las respuestas. Incluye restricciones específicas como "sin usar streams" o "usando solo recursión" para dificultar respuestas genéricas de IA.
+                IMPORTANTE: Las preguntas de código deben ser lo suficientemente 
+                específicas para detectar si el candidato realmente sabe programar o si usó IA para
+                 generar las respuestas. Incluye restricciones específicas como "sin usar streams" o "usando solo recursión" para dificultar respuestas genéricas de IA.
                 
                 Retorna un JSON array con estos campos:
                 - "enunciado": texto de la pregunta en español (para preguntas de código, incluye el contexto y restricciones)
@@ -101,6 +103,12 @@ public class OpenAiTestGenerator {
                 "temperature", 0.7
         );
 
+        log.info("========== PROMPT ENVIADO A OPENAI (Test Generation) ==========");
+        log.info("Model: {}", model);
+        log.info("Skills: {}", skillsList);
+        log.info("Prompt: {}", prompt);
+        log.info("================================================================");
+
         return openAiWebClient.post()
                 .uri("/v1/chat/completions")
                 .bodyValue(request)
@@ -109,7 +117,11 @@ public class OpenAiTestGenerator {
                 .map(response -> {
                     List<Map<String, Object>> choices = (List<Map<String, Object>>) response.get("choices");
                     Map<String, Object> message = (Map<String, Object>) choices.get(0).get("message");
-                    return (String) message.get("content");
+                    String content = (String) message.get("content");
+                    log.info("========== RESPUESTA RAW DE OPENAI (Test Generation) ==========");
+                    log.info("{}", content);
+                    log.info("================================================================");
+                    return content;
                 });
     }
 

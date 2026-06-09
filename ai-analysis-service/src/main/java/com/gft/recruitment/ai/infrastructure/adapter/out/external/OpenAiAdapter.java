@@ -56,6 +56,11 @@ public class OpenAiAdapter implements OpenAiPort {
                 "temperature", 0.3
         );
 
+        log.info("========== PROMPT ENVIADO A OPENAI (CV Analysis) ==========");
+        log.info("Model: {}", model);
+        log.info("Prompt: {}", prompt);
+        log.info("============================================================");
+
         return openAiWebClient.post()
                 .uri("/v1/chat/completions")
                 .bodyValue(requestBody)
@@ -65,8 +70,20 @@ public class OpenAiAdapter implements OpenAiPort {
                 .retryWhen(Retry.backoff(maxRetries, Duration.ofSeconds(2))
                         .maxBackoff(Duration.ofSeconds(8))
                         .doBeforeRetry(signal -> log.warn("Retrying OpenAI call, attempt {}", signal.totalRetries() + 1)))
+                .doOnNext(rawResponse -> {
+                    log.info("========== RESPUESTA RAW DE OPENAI (CV Analysis) ==========");
+                    log.info("{}", rawResponse);
+                    log.info("============================================================");
+                })
                 .flatMap(this::parseResponse)
-                .doOnSuccess(r -> log.info("OpenAI analysis completed successfully"))
+                .doOnSuccess(r -> {
+                    log.info("========== RESPUESTA PARSEADA DE OPENAI (CV Analysis) ==========");
+                    log.info("Habilidades detectadas: {}", r.habilidadesTecnicas());
+                    log.info("Años de experiencia: {}", r.aniosExperiencia());
+                    log.info("Seniority detectado: {}", r.seniorityDetectado());
+                    log.info("Resumen profesional: {}", r.resumenProfesional());
+                    log.info("================================================================");
+                })
                 .doOnError(e -> log.error("OpenAI analysis failed: {}", e.getMessage()));
     }
 

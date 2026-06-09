@@ -33,10 +33,10 @@
         </root>
     </springProfile>
 
-    <!-- Production profile: JSON structured logs -->
+    <!-- Production profile: human-readable logs (temporarily for evidence) -->
     <springProfile name="prod,docker">
         <root level="INFO">
-            <appender-ref ref="JSON_CONSOLE"/>
+            <appender-ref ref="CONSOLE"/>
         </root>
     </springProfile>
 
